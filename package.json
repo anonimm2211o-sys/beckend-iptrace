@@ -1,5 +1,7 @@
 {
-  "name": "backend-iptrace",
+  "name": "beckend-iptrace",
   "version": "1.0.0",
-  "dependencies": {}
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
 }
