@@ -1,4 +1,5 @@
 const fetch = require('node-fetch');
+const net = require('net');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,36 +15,53 @@ module.exports = async (req, res) => {
     const clean = domain.replace(/^https?:\/\//, '').split('/')[0];
     const results = {
       domain: clean,
+      cloudflare_detected: false,
       origin_ip: null,
       discovered_ips: [],
-      sources: {}
+      open_ports: [],
+      sources: {},
+      headers: {}
     };
 
-    // 1. crt.sh (Certificate Transparency)
+    // ========== 1. CEK CLOUDFLARE ==========
+    try {
+      const cfCheck = await fetch(`https://${clean}`, { method: 'HEAD', timeout: 5000 });
+      const headers = cfCheck.headers;
+      results.headers = Object.fromEntries(headers.entries());
+      results.cloudflare_detected = !!(
+        headers.get('cf-ray') || 
+        headers.get('cf-cache-status') || 
+        headers.get('server')?.includes('cloudflare')
+      );
+    } catch {}
+
+    // ========== 2. CRTH.SH (Certificate Transparency) ==========
     try {
       const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`);
       const crtData = await crtRes.json();
       const crtIps = [];
-      for (const entry of crtData) {
-        if (entry.name_value && entry.name_value.includes(clean)) {
-          try {
-            const subRes = await fetch(`https://dns.google/resolve?name=${entry.name_value}&type=A`);
-            const subData = await subRes.json();
-            if (subData.Answer) {
-              for (const ans of subData.Answer) {
-                if (ans.data && !crtIps.includes(ans.data)) {
-                  crtIps.push(ans.data);
+      if (Array.isArray(crtData)) {
+        for (const entry of crtData) {
+          if (entry.name_value && entry.name_value.includes(clean)) {
+            try {
+              const subRes = await fetch(`https://dns.google/resolve?name=${entry.name_value}&type=A`);
+              const subData = await subRes.json();
+              if (subData.Answer) {
+                for (const ans of subData.Answer) {
+                  if (ans.data && !crtIps.includes(ans.data)) {
+                    crtIps.push(ans.data);
+                  }
                 }
               }
-            }
-          } catch {}
+            } catch {}
+          }
         }
       }
-      results.discovered_ips = [...new Set(crtIps)];
       results.sources.crt_sh = crtIps;
+      results.discovered_ips = [...new Set(crtIps)];
     } catch {}
 
-    // 2. HackerTarget DNS History
+    // ========== 3. HACKERTARGET (DNS History) ==========
     try {
       const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`);
       const htData = await htRes.text();
@@ -55,22 +73,22 @@ module.exports = async (req, res) => {
           htIps.push(parts[1]);
         }
       }
-      results.discovered_ips = [...new Set([...results.discovered_ips, ...htIps])];
       results.sources.hackertarget = htIps;
+      results.discovered_ips = [...new Set([...results.discovered_ips, ...htIps])];
     } catch {}
 
-    // 3. OTX AlienVault Passive DNS
+    // ========== 4. OTX ALIENVAULT (Passive DNS) ==========
     try {
       const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`);
       const otxData = await otxRes.json();
       if (otxData.passive_dns) {
         const otxIps = otxData.passive_dns.map(p => p.address).filter(Boolean);
-        results.discovered_ips = [...new Set([...results.discovered_ips, ...otxIps])];
         results.sources.otx = otxIps;
+        results.discovered_ips = [...new Set([...results.discovered_ips, ...otxIps])];
       }
     } catch {}
 
-    // 4. SecurityTrails (DAFTAR API KEY GRATIS DULU)
+    // ========== 5. SECURITYTRAILS (API key gratis) ==========
     try {
       const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
         headers: { 'APIKEY': 'your-api-key-here' } // ← GANTI PAKE API KEY LU
@@ -78,14 +96,46 @@ module.exports = async (req, res) => {
       const stData = await stRes.json();
       if (stData.records) {
         const stIps = stData.records.flatMap(r => r.values || []);
-        results.discovered_ips = [...new Set([...results.discovered_ips, ...stIps])];
         results.sources.securitytrails = stIps;
+        results.discovered_ips = [...new Set([...results.discovered_ips, ...stIps])];
       }
     } catch {}
 
-    // Ambil IP pertama sebagai origin
+    // ========== 6. DNS GOOGLE (fallback) ==========
+    if (results.discovered_ips.length === 0) {
+      try {
+        const dnsRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`);
+        const dnsData = await dnsRes.json();
+        if (dnsData.Answer) {
+          const dnsIps = dnsData.Answer.map(a => a.data);
+          results.sources.dns_google = dnsIps;
+          results.discovered_ips = dnsIps;
+        }
+      } catch {}
+    }
+
+    // ========== 7. AMBIL IP PERTAMA SEBAGAI ORIGIN ==========
     results.origin_ip = results.discovered_ips[0] || 'tidak ditemukan';
 
+    // ========== 8. PORT SCANNING (ke IP yg ditemuin) ==========
+    if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
+      const ports = [80, 443, 8080, 8443, 3000, 3306, 22, 21, 25, 53, 143, 993, 995, 3306, 5432, 6379, 27017];
+      const openPorts = [];
+      for (const port of ports) {
+        const isOpen = await new Promise((resolve) => {
+          const socket = new net.Socket();
+          socket.setTimeout(1000);
+          socket.on('connect', () => { socket.destroy(); resolve(true); });
+          socket.on('timeout', () => { socket.destroy(); resolve(false); });
+          socket.on('error', () => resolve(false));
+          socket.connect(port, results.origin_ip);
+        });
+        if (isOpen) openPorts.push(port);
+      }
+      results.open_ports = openPorts;
+    }
+
+    // ========== 9. KIRIM HASIL ==========
     res.status(200).json(results);
 
   } catch (err) {
