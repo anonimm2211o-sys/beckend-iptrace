@@ -1,6 +1,4 @@
-const { exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const fetch = require('node-fetch');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,44 +12,79 @@ module.exports = async (req, res) => {
 
   try {
     const clean = domain.replace(/^https?:\/\//, '').split('/')[0];
+    const results = {
+      domain: clean,
+      origin_ip: null,
+      discovered_ips: [],
+      sources: {}
+    };
 
-    // Clone CloudRecon kalo belum ada di /tmp
-    const cloudreconDir = '/tmp/cloudrecon';
-    if (!fs.existsSync(cloudreconDir)) {
-      await new Promise((resolve, reject) => {
-        exec(
-          `git clone https://github.com/intspired/CloudRecon.git ${cloudreconDir}`,
-          (error, stdout, stderr) => {
-            if (error) return reject(error);
-            resolve(stdout);
-          }
-        );
+    // 1. Certificate Transparency (crt.sh)
+    try {
+      const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`);
+      const crtData = await crtRes.json();
+      const crtIps = [];
+      for (const entry of crtData) {
+        if (entry.name_value && entry.name_value.includes(clean)) {
+          // Coba resolve subdomain
+          try {
+            const subRes = await fetch(`https://dns.google/resolve?name=${entry.name_value}&type=A`);
+            const subData = await subRes.json();
+            if (subData.Answer) {
+              for (const ans of subData.Answer) {
+                if (ans.data && !crtIps.includes(ans.data)) {
+                  crtIps.push(ans.data);
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+      results.discovered_ips = [...new Set(crtIps)];
+      results.sources.crt_sh = crtIps;
+    } catch {}
+
+    // 2. DNS History via SecurityTrails (gratis, tanpa API key)
+    try {
+      const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
+        headers: { 'APIKEY': 'your-api-key' } // gratis daftar dulu
       });
+      const stData = await stRes.json();
+      if (stData.records) {
+        const stIps = stData.records.flatMap(r => r.values || []);
+        results.discovered_ips = [...new Set([...results.discovered_ips, ...stIps])];
+        results.sources.securitytrails = stIps;
+      }
+    } catch {}
+
+    // 3. Passive DNS via OTX AlienVault (gratis)
+    try {
+      const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`);
+      const otxData = await otxRes.json();
+      if (otxData.passive_dns) {
+        const otxIps = otxData.passive_dns.map(p => p.address).filter(Boolean);
+        results.discovered_ips = [...new Set([...results.discovered_ips, ...otxIps])];
+        results.sources.otx = otxIps;
+      }
+    } catch {}
+
+    // 4. Coba DNS A langsung (fallback)
+    if (results.discovered_ips.length === 0) {
+      try {
+        const dnsRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`);
+        const dnsData = await dnsRes.json();
+        if (dnsData.Answer) {
+          const dnsIps = dnsData.Answer.map(a => a.data);
+          results.discovered_ips = dnsIps;
+          results.sources.dns_google = dnsIps;
+        }
+      } catch {}
     }
 
-    // Jalanin CloudRecon mode passive
-    const outputFile = `/tmp/${clean}_recon.json`;
-    await new Promise((resolve, reject) => {
-      exec(
-        `python3 ${cloudreconDir}/recon.py ${clean} --passive --output --output-file ${outputFile}`,
-        { timeout: 30000 },
-        (error, stdout, stderr) => {
-          if (error) return reject(error);
-          resolve(stdout);
-        }
-      );
-    });
+    // Ambil IP pertama sebagai origin
+    results.origin_ip = results.discovered_ips[0] || 'tidak ditemukan';
 
-    // Baca hasil JSON
-    const result = JSON.parse(fs.readFileSync(outputFile, 'utf8'));
-
-    res.status(200).json({
-      domain: clean,
-      origin_ip: result.origin_ip || 'tidak ditemukan',
-      discovered_ips: result.discovered_ips || [],
-      sources: result.sources || {},
-      open_ports: result.open_ports || []
-    });
+    res.status(200).json(results);
 
   } catch (err) {
     res.status(500).json({ error: err.message || 'Terjadi kesalahan.' });
