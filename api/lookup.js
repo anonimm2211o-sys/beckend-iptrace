@@ -7,7 +7,6 @@ function resolveHostname(hostname) {
   return new Promise((resolve) => {
     dns.resolve4(hostname, (err, addresses) => {
       if (err) {
-        // Coba IPv6 kalo IPv4 gagal
         dns.resolve6(hostname, (err6, addresses6) => {
           if (err6) return resolve(null);
           resolve(addresses6);
@@ -30,11 +29,9 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // ========== NORMALISASI DOMAIN ==========
     let clean = domain.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
     clean = clean.toLowerCase().trim();
 
-    // Validasi domain sederhana
     if (!clean || !clean.includes('.')) {
       return res.status(400).json({ error: 'Domain tidak valid.' });
     }
@@ -83,7 +80,7 @@ module.exports = async (req, res) => {
       );
     } catch {}
 
-    // ========== 3. CRTSH (Certificate Transparency) ==========
+    // ========== 3. CRTSH ==========
     try {
       const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`, { timeout: 8000 });
       const crtData = await crtRes.json();
@@ -111,7 +108,7 @@ module.exports = async (req, res) => {
       }
     } catch {}
 
-    // ========== 4. HACKERTARGET (DNS History) ==========
+    // ========== 4. HACKERTARGET ==========
     try {
       const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`, { timeout: 6000 });
       const htData = await htRes.text();
@@ -130,7 +127,7 @@ module.exports = async (req, res) => {
       for (const ip of htIps) allIps.add(ip);
     } catch {}
 
-    // ========== 5. OTX ALIENVAULT (Passive DNS) ==========
+    // ========== 5. OTX ==========
     try {
       const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`, { timeout: 6000 });
       const otxData = await otxRes.json();
@@ -143,7 +140,7 @@ module.exports = async (req, res) => {
       }
     } catch {}
 
-    // ========== 6. DNS GOOGLE (fallback) ==========
+    // ========== 6. DNS GOOGLE (FALLBACK) ==========
     if (allIps.size === 0) {
       try {
         const dnsRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`, { timeout: 5000 });
@@ -159,14 +156,11 @@ module.exports = async (req, res) => {
       } catch {}
     }
 
-    // ========== 7. KONVERSI SET KE ARRAY ==========
     results.discovered_ips = [...allIps];
-
-    // ========== 8. ORIGIN IP (ambil IP pertama yang valid) ==========
     const validIp = results.discovered_ips.find(ip => ip && ip.match(/\d+\.\d+\.\d+\.\d+/));
     results.origin_ip = validIp || 'tidak ditemukan';
 
-    // ========== 9. PORT SCANNING ==========
+    // ========== 7. PORT SCAN ==========
     if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
       const ports = [80, 443, 8080, 8443, 3000, 3306, 22, 21, 25, 53];
       const openPorts = [];
@@ -184,7 +178,7 @@ module.exports = async (req, res) => {
       results.open_ports = openPorts;
     }
 
-    // ========== 10. GEOIP LOOKUP (ip-api.com) ==========
+    // ========== 8. GEOIP ==========
     if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
       try {
         const geoRes = await fetch(`https://ip-api.com/json/${results.origin_ip}?fields=country,city,isp,org`, { timeout: 5000 });
@@ -195,7 +189,7 @@ module.exports = async (req, res) => {
       } catch {}
     }
 
-    // ========== 11. KIRIM RESPON ==========
+    // ========== 9. KIRIM RESPON ==========
     res.status(200).json({
       domain: results.domain,
       origin_ip: results.origin_ip,
