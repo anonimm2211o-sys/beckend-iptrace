@@ -19,14 +19,13 @@ module.exports = async (req, res) => {
       sources: {}
     };
 
-    // 1. Certificate Transparency (crt.sh)
+    // 1. Certificate Transparency (crt.sh) - Bisa tembus
     try {
       const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`);
       const crtData = await crtRes.json();
       const crtIps = [];
       for (const entry of crtData) {
         if (entry.name_value && entry.name_value.includes(clean)) {
-          // Coba resolve subdomain
           try {
             const subRes = await fetch(`https://dns.google/resolve?name=${entry.name_value}&type=A`);
             const subData = await subRes.json();
@@ -44,20 +43,23 @@ module.exports = async (req, res) => {
       results.sources.crt_sh = crtIps;
     } catch {}
 
-    // 2. DNS History via SecurityTrails (gratis, tanpa API key)
+    // 2. HackerTarget DNS History - Bisa tembus
     try {
-      const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
-        headers: { 'APIKEY': 'your-api-key' } // gratis daftar dulu
-      });
-      const stData = await stRes.json();
-      if (stData.records) {
-        const stIps = stData.records.flatMap(r => r.values || []);
-        results.discovered_ips = [...new Set([...results.discovered_ips, ...stIps])];
-        results.sources.securitytrails = stIps;
+      const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`);
+      const htData = await htRes.text();
+      const lines = htData.split('\n');
+      const htIps = [];
+      for (const line of lines) {
+        const parts = line.split(',');
+        if (parts.length === 2 && parts[1].match(/\d+\.\d+\.\d+\.\d+/)) {
+          htIps.push(parts[1]);
+        }
       }
+      results.discovered_ips = [...new Set([...results.discovered_ips, ...htIps])];
+      results.sources.hackertarget = htIps;
     } catch {}
 
-    // 3. Passive DNS via OTX AlienVault (gratis)
+    // 3. AlienVault OTX Passive DNS - Bisa tembus
     try {
       const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`);
       const otxData = await otxRes.json();
@@ -68,18 +70,18 @@ module.exports = async (req, res) => {
       }
     } catch {}
 
-    // 4. Coba DNS A langsung (fallback)
-    if (results.discovered_ips.length === 0) {
-      try {
-        const dnsRes = await fetch(`https://dns.google/resolve?name=${clean}&type=A`);
-        const dnsData = await dnsRes.json();
-        if (dnsData.Answer) {
-          const dnsIps = dnsData.Answer.map(a => a.data);
-          results.discovered_ips = dnsIps;
-          results.sources.dns_google = dnsIps;
-        }
-      } catch {}
-    }
+    // 4. SecurityTrails DNS History (gratis, daftar API key)
+    try {
+      const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
+        headers: { 'APIKEY': 'your-api-key' }
+      });
+      const stData = await stRes.json();
+      if (stData.records) {
+        const stIps = stData.records.flatMap(r => r.values || []);
+        results.discovered_ips = [...new Set([...results.discovered_ips, ...stIps])];
+        results.sources.securitytrails = stIps;
+      }
+    } catch {}
 
     // Ambil IP pertama sebagai origin
     results.origin_ip = results.discovered_ips[0] || 'tidak ditemukan';
