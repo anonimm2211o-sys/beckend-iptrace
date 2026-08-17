@@ -15,13 +15,25 @@ module.exports = async (req, res) => {
   try {
     const clean = domain.replace(/^https?:\/\//, '').split('/')[0];
 
-    // Jalanin CloudRecon pake mode passive
-    const scriptPath = path.join(__dirname, '..', 'cloudrecon', 'recon.py');
-    const outputFile = path.join('/tmp', `${clean}_recon.json`);
+    // Clone CloudRecon kalo belum ada di /tmp
+    const cloudreconDir = '/tmp/cloudrecon';
+    if (!fs.existsSync(cloudreconDir)) {
+      await new Promise((resolve, reject) => {
+        exec(
+          `git clone https://github.com/intspired/CloudRecon.git ${cloudreconDir}`,
+          (error, stdout, stderr) => {
+            if (error) return reject(error);
+            resolve(stdout);
+          }
+        );
+      });
+    }
 
+    // Jalanin CloudRecon mode passive
+    const outputFile = `/tmp/${clean}_recon.json`;
     await new Promise((resolve, reject) => {
       exec(
-        `python3 ${scriptPath} ${clean} --passive --output --output-file ${outputFile}`,
+        `python3 ${cloudreconDir}/recon.py ${clean} --passive --output --output-file ${outputFile}`,
         { timeout: 30000 },
         (error, stdout, stderr) => {
           if (error) return reject(error);
