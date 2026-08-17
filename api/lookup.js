@@ -23,7 +23,7 @@ module.exports = async (req, res) => {
       headers: {}
     };
 
-    // ========== 1. CEK CLOUDFLARE ==========
+    // ========== 1. CLOUDFLARE DETECTION ==========
     try {
       const cfCheck = await fetch(`https://${clean}`, { method: 'HEAD', timeout: 5000 });
       const headers = cfCheck.headers;
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
       );
     } catch {}
 
-    // ========== 2. CRTH.SH (Certificate Transparency) ==========
+    // ========== 2. CRTSH ==========
     try {
       const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`);
       const crtData = await crtRes.json();
@@ -61,7 +61,7 @@ module.exports = async (req, res) => {
       results.discovered_ips = [...new Set(crtIps)];
     } catch {}
 
-    // ========== 3. HACKERTARGET (DNS History) ==========
+    // ========== 3. HACKERTARGET ==========
     try {
       const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`);
       const htData = await htRes.text();
@@ -77,7 +77,7 @@ module.exports = async (req, res) => {
       results.discovered_ips = [...new Set([...results.discovered_ips, ...htIps])];
     } catch {}
 
-    // ========== 4. OTX ALIENVAULT (Passive DNS) ==========
+    // ========== 4. OTX ==========
     try {
       const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`);
       const otxData = await otxRes.json();
@@ -88,10 +88,10 @@ module.exports = async (req, res) => {
       }
     } catch {}
 
-    // ========== 5. SECURITYTRAILS (API key gratis) ==========
+    // ========== 5. SECURITYTRAILS ==========
     try {
       const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
-        headers: { 'APIKEY': 'your-api-key-here' } // ← GANTI PAKE API KEY LU
+        headers: { 'APIKEY': 'your-api-key-here' }
       });
       const stData = await stRes.json();
       if (stData.records) {
@@ -114,10 +114,10 @@ module.exports = async (req, res) => {
       } catch {}
     }
 
-    // ========== 7. AMBIL IP PERTAMA SEBAGAI ORIGIN ==========
+    // ========== 7. ORIGIN IP ==========
     results.origin_ip = results.discovered_ips[0] || 'tidak ditemukan';
 
-    // ========== 8. PORT SCANNING (ke IP yg ditemuin) ==========
+    // ========== 8. PORT SCANNING ==========
     if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
       const ports = [80, 443, 8080, 8443, 3000, 3306, 22, 21, 25, 53, 143, 993, 995, 3306, 5432, 6379, 27017];
       const openPorts = [];
@@ -135,8 +135,30 @@ module.exports = async (req, res) => {
       results.open_ports = openPorts;
     }
 
-    // ========== 9. KIRIM HASIL ==========
-    res.status(200).json(results);
+    // ========== 9. GEO LOOKUP ==========
+    let country = '—', city = '—', isp = '—';
+    if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
+      try {
+        const geoRes = await fetch(`https://ip-api.com/json/${results.origin_ip}?fields=country,city,isp`);
+        const geo = await geoRes.json();
+        country = geo.country || '—';
+        city = geo.city || '—';
+        isp = geo.isp || '—';
+      } catch {}
+    }
+
+    // ========== 10. KIRIM HASIL ==========
+    res.status(200).json({
+      origin_ip: results.origin_ip,
+      domain: results.domain,
+      open_ports: results.open_ports,
+      discovered_ips: results.discovered_ips,
+      sources: results.sources,
+      cloudflare_detected: results.cloudflare_detected,
+      country: country,
+      city: city,
+      isp: isp
+    });
 
   } catch (err) {
     res.status(500).json({ error: err.message || 'Terjadi kesalahan.' });
