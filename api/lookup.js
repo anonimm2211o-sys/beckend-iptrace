@@ -181,12 +181,23 @@ module.exports = async (req, res) => {
     // ========== 8. GEOIP ==========
     if (results.origin_ip && results.origin_ip !== 'tidak ditemukan') {
       try {
-        const geoRes = await fetch(`https://ip-api.com/json/${results.origin_ip}?fields=country,city,isp,org`, { timeout: 5000 });
+        const geoRes = await fetch(`https://ip-api.com/json/${results.origin_ip}?fields=status,country,city,isp,org`, { timeout: 5000 });
         const geo = await geoRes.json();
-        results.country = geo.country || '—';
-        results.city = geo.city || '—';
-        results.isp = geo.isp || geo.org || '—';
-      } catch {}
+        if (geo.status === 'success') {
+          results.country = geo.country || '—';
+          results.city = geo.city || '—';
+          results.isp = geo.isp || geo.org || '—';
+        } else {
+          results.country = '—';
+          results.city = '—';
+          results.isp = '—';
+        }
+      } catch (err) {
+        console.error('GeoIP error:', err.message);
+        results.country = '—';
+        results.city = '—';
+        results.isp = '—';
+      }
     }
 
     // ========== 9. KIRIM RESPON ==========
