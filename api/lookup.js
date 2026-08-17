@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
       sources: {}
     };
 
-    // 1. Certificate Transparency (crt.sh) - Bisa tembus
+    // 1. crt.sh (Certificate Transparency)
     try {
       const crtRes = await fetch(`https://crt.sh/?q=%25.${clean}&output=json`);
       const crtData = await crtRes.json();
@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
       results.sources.crt_sh = crtIps;
     } catch {}
 
-    // 2. HackerTarget DNS History - Bisa tembus
+    // 2. HackerTarget DNS History
     try {
       const htRes = await fetch(`https://api.hackertarget.com/hostsearch/?q=${clean}`);
       const htData = await htRes.text();
@@ -59,7 +59,7 @@ module.exports = async (req, res) => {
       results.sources.hackertarget = htIps;
     } catch {}
 
-    // 3. AlienVault OTX Passive DNS - Bisa tembus
+    // 3. OTX AlienVault Passive DNS
     try {
       const otxRes = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${clean}/passive_dns`);
       const otxData = await otxRes.json();
@@ -70,10 +70,10 @@ module.exports = async (req, res) => {
       }
     } catch {}
 
-    // 4. SecurityTrails DNS History (gratis, daftar API key)
+    // 4. SecurityTrails (DAFTAR API KEY GRATIS DULU)
     try {
       const stRes = await fetch(`https://api.securitytrails.com/v1/history/${clean}/dns/a`, {
-        headers: { 'APIKEY': 'your-api-key' }
+        headers: { 'APIKEY': 'your-api-key-here' } // ← GANTI PAKE API KEY LU
       });
       const stData = await stRes.json();
       if (stData.records) {
